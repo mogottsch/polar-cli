@@ -10,7 +10,9 @@ Small `uv`-installable CLI for syncing Polar AccessLink data into a local SQLite
 - persistent config and auth state using XDG-style paths
 - SQLite cache for workouts, activity summaries, sleep, and nightly recharge
 - raw JSON payload archive for debugging
-- safe transactional sync: local persistence happens before Polar commit
+- training sync now prioritizes the working non-transactional `/v3/exercises` endpoint
+- cached workout rows keep heart-rate summaries plus raw samples, zones, and route payloads when Polar includes them
+- sync tolerates empty sleep / nightly recharge responses and downgrades broken activity 404s to warnings
 - JSON output for automation-friendly commands
 
 ## Install
@@ -83,11 +85,44 @@ polarctl sync --json
 ```bash
 polarctl auth status
 polarctl user info --json
+polarctl sync --resource exercises --since 30 --json
 polarctl workouts list --limit 20 --json
 polarctl sleep list --json
 polarctl activity list --json
 polarctl doctor --json
 ```
+
+## Training data now retrievable
+
+`polarctl sync --resource exercises` now reads the non-transactional `GET /v3/exercises` collection first, requesting `samples=true`, `zones=true`, and `route=true` when supported.
+
+For each stored workout, the CLI keeps:
+
+- start time
+- duration
+- sport and detailed sport info when provided
+- distance
+- calories
+- heart-rate average, maximum, and minimum when provided
+- training load
+- ascent and descent when provided
+- average / maximum speed when provided
+- average / maximum pace when provided
+- average / maximum cadence when provided
+- average / maximum power when provided
+- heart-rate and other sample series exactly as returned by Polar, stored in the raw workout JSON and in a dedicated `samples_json` cache column
+- zone payloads exactly as returned by Polar, stored in raw JSON and `zones_json`
+- route payloads exactly as returned by Polar, stored in raw JSON and `route_json`
+
+The `workouts list` command returns the stored raw Polar workout payloads, so downstream tooling can inspect heart-rate-over-time, pace, speed, and route details directly when Polar includes them.
+
+## Endpoint behavior notes
+
+- Exercises: uses `/v3/exercises` first instead of the older user transaction flow.
+- Activity: uses `/v3/users/activity`, but if Polar returns 404 for the account the sync continues with a warning instead of failing the whole run.
+- Sleep: uses `/v3/users/sleep` and accepts empty `{"nights": []}` responses.
+- Nightly recharge: uses `/v3/users/nightly-recharge` and accepts empty `{"recharges": []}` responses.
+- Deprecated exercise transaction flows are no longer required for training sync.
 
 ## Paths
 

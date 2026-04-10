@@ -527,6 +527,7 @@ def sync_command(
         try:
             engine = SyncEngine(paths=paths, state=state, connection=connection, client=client)
             counts = engine.run(resource=resource, since_days=since)
+            warnings = list(engine.warnings)
         finally:
             client.close()
             connection.close()
@@ -540,6 +541,7 @@ def sync_command(
                     "counts": counts,
                     "last_sync_at": state.last_sync_at.isoformat(),
                 },
+                warnings=warnings,
             ),
             json_output,
         )

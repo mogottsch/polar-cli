@@ -101,7 +101,7 @@ def test_auth_login_no_listen_prints_manual_flow(runner, credentials_env, monkey
             self.config = config
 
         def build_authorization_url(self, redirect_uri: str | None = None, oauth_state: str | None = None) -> str:
-            assert redirect_uri == "http://127.0.0.1:9999/callback"
+            assert redirect_uri == "http://localhost:9999/callback"
             assert oauth_state
             return f"https://flow.polar.com/oauth2/authorization?client_id=client-id&state={oauth_state}"
 
@@ -118,7 +118,7 @@ def test_auth_login_no_listen_prints_manual_flow(runner, credentials_env, monkey
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["data"]["mode"] == "manual"
-    assert payload["data"]["redirect_uri"] == "http://127.0.0.1:9999/callback"
+    assert payload["data"]["redirect_uri"] == "http://localhost:9999/callback"
     assert payload["warnings"]
 
 

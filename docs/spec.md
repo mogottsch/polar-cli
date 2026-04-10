@@ -44,9 +44,9 @@ The localhost callback server can still exist for completeness, but manual compl
 - User must be registered with `POST /v3/users` after authorization before data access works
 - AccessLink v3 docs say access tokens do not expire unless revoked
 - Some endpoints are transactional and must be committed only after successful local persistence
-- Transactional endpoints can return up to 50 entities per transaction
+- Transactional endpoints can return up to 50 entities per transaction, but some documented transaction flows are currently unreliable in real use
 - Uncommitted transactions are disbanded after ~10 minutes and then reappear later
-- Non-transactional endpoints exist for some resources like sleep and nightly recharge
+- Non-transactional endpoints exist for some resources like exercises, sleep, and nightly recharge and should be preferred when they work reliably
 
 ## Scope for v1
 Implement the smallest useful CLI that Hermes can rely on.
@@ -206,17 +206,19 @@ Behavior:
 ### `polarctl sync`
 Behavior:
 - run all supported sync steps in a safe order:
-  1. exercises (transactional)
-  2. activity summaries (transactional)
+  1. exercises via the non-transactional `/v3/exercises` collection, requesting samples / zones / route extras when available
+  2. activity summaries via `/v3/users/activity` when available
   3. physical info can be skipped in v1 unless easy
-  4. sleep (non-transactional)
-  5. nightly recharge (non-transactional)
+  4. sleep via `/v3/users/sleep`
+  5. nightly recharge via `/v3/users/nightly-recharge`
 - write normalized rows into sqlite
 - archive raw payloads
+- keep the full raw exercise payload so heart-rate-over-time and similar series remain available from cache
+- if activity is unavailable for an account, continue sync with a warning instead of failing the whole run
 - print summary JSON with counts per resource and timestamps
 
 Flags:
-- `--since DAYS` optional hint for non-transactional backfill reads
+- `--since DAYS` optional hint for collection backfill reads
 - `--resource exercises|activity|sleep|nightly-recharge|all`
 - `--json`
 
@@ -264,11 +266,27 @@ Use sqlite with simple tables and unique constraints.
 - `start_time`
 - `duration`
 - `sport`
+- `detailed_sport_info`
 - `distance`
 - `calories`
 - `avg_hr`
 - `max_hr`
+- `min_hr`
 - `training_load`
+- `ascent`
+- `descent`
+- `average_speed`
+- `maximum_speed`
+- `average_pace`
+- `maximum_pace`
+- `cadence_avg`
+- `cadence_max`
+- `power_avg`
+- `power_max`
+- `route_points`
+- `samples_json`
+- `zones_json`
+- `route_json`
 - `resource_uri` unique if available
 - `raw_json`
 - timestamps

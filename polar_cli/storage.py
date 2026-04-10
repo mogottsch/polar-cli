@@ -92,11 +92,27 @@ def init_db(connection: sqlite3.Connection) -> None:
             start_time TEXT,
             duration TEXT,
             sport TEXT,
+            detailed_sport_info TEXT,
             distance REAL,
             calories INTEGER,
             avg_hr INTEGER,
             max_hr INTEGER,
+            min_hr INTEGER,
             training_load REAL,
+            ascent REAL,
+            descent REAL,
+            average_speed REAL,
+            maximum_speed REAL,
+            average_pace REAL,
+            maximum_pace REAL,
+            cadence_avg REAL,
+            cadence_max REAL,
+            power_avg REAL,
+            power_max REAL,
+            route_points INTEGER,
+            samples_json TEXT,
+            zones_json TEXT,
+            route_json TEXT,
             resource_uri TEXT UNIQUE,
             raw_json TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -153,7 +169,37 @@ def init_db(connection: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_columns(
+        connection,
+        "exercises",
+        {
+            "detailed_sport_info": "TEXT",
+            "min_hr": "INTEGER",
+            "ascent": "REAL",
+            "descent": "REAL",
+            "average_speed": "REAL",
+            "maximum_speed": "REAL",
+            "average_pace": "REAL",
+            "maximum_pace": "REAL",
+            "cadence_avg": "REAL",
+            "cadence_max": "REAL",
+            "power_avg": "REAL",
+            "power_max": "REAL",
+            "route_points": "INTEGER",
+            "samples_json": "TEXT",
+            "zones_json": "TEXT",
+            "route_json": "TEXT",
+        },
+    )
     connection.commit()
+
+
+def _ensure_columns(connection: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+    for column, definition in columns.items():
+        if column in existing:
+            continue
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def archive_json(paths: AppPaths, resource: str, payload: dict[str, Any], stem: str) -> Path:
@@ -165,8 +211,35 @@ def archive_json(paths: AppPaths, resource: str, payload: dict[str, Any], stem: 
     return file_path
 
 
-def _json(item: dict[str, Any]) -> str:
+def _json(item: Any) -> str:
     return json.dumps(item, sort_keys=True)
+
+
+def _series_payload(item: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = item.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _metric_value(metric: Any, *keys: str) -> Any:
+    if isinstance(metric, dict):
+        for key in keys:
+            if key in metric and metric[key] is not None:
+                return metric[key]
+    return None
+
+
+def _route_points(route: Any) -> int | None:
+    if isinstance(route, list):
+        return len(route)
+    if isinstance(route, dict):
+        for key in ("points", "coordinates", "route"):
+            value = route.get(key)
+            if isinstance(value, list):
+                return len(value)
+    return None
 
 
 def extract_polar_user_id(payload: dict[str, Any], fallback: str | None = None) -> str | None:
@@ -231,22 +304,49 @@ def upsert_exercises(
     for item in items:
         resource_uri = item.get("resource-uri") or item.get("resource_uri") or item.get("url")
         item_id = str(item.get("id") or resource_uri)
+        heart_rate = item.get("heart-rate") or item.get("heart_rate") or {}
+        speed = item.get("speed") or {}
+        pace = item.get("pace") or {}
+        cadence = item.get("cadence") or {}
+        power = item.get("power") or {}
+        samples = _series_payload(item, "samples", "sample-data", "sample_data")
+        zones = _series_payload(item, "zones", "heart-rate-zones", "heart_rate_zones")
+        route = _series_payload(item, "route")
+
         connection.execute(
             """
             INSERT INTO exercises (
-                id, polar_user_id, start_time, duration, sport, distance, calories, avg_hr, max_hr, training_load,
-                resource_uri, raw_json, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                id, polar_user_id, start_time, duration, sport, detailed_sport_info, distance, calories,
+                avg_hr, max_hr, min_hr, training_load, ascent, descent, average_speed, maximum_speed,
+                average_pace, maximum_pace, cadence_avg, cadence_max, power_avg, power_max, route_points,
+                samples_json, zones_json, route_json, resource_uri, raw_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
                 polar_user_id = excluded.polar_user_id,
                 start_time = excluded.start_time,
                 duration = excluded.duration,
                 sport = excluded.sport,
+                detailed_sport_info = excluded.detailed_sport_info,
                 distance = excluded.distance,
                 calories = excluded.calories,
                 avg_hr = excluded.avg_hr,
                 max_hr = excluded.max_hr,
+                min_hr = excluded.min_hr,
                 training_load = excluded.training_load,
+                ascent = excluded.ascent,
+                descent = excluded.descent,
+                average_speed = excluded.average_speed,
+                maximum_speed = excluded.maximum_speed,
+                average_pace = excluded.average_pace,
+                maximum_pace = excluded.maximum_pace,
+                cadence_avg = excluded.cadence_avg,
+                cadence_max = excluded.cadence_max,
+                power_avg = excluded.power_avg,
+                power_max = excluded.power_max,
+                route_points = excluded.route_points,
+                samples_json = excluded.samples_json,
+                zones_json = excluded.zones_json,
+                route_json = excluded.route_json,
                 resource_uri = excluded.resource_uri,
                 raw_json = excluded.raw_json,
                 updated_at = CURRENT_TIMESTAMP
@@ -257,11 +357,27 @@ def upsert_exercises(
                 item.get("start-time") or item.get("start_time"),
                 item.get("duration"),
                 item.get("sport") or item.get("sport-name"),
+                item.get("detailed-sport-info") or item.get("detailed_sport_info"),
                 item.get("distance"),
                 item.get("calories"),
-                item.get("heart-rate") and item["heart-rate"].get("average") or item.get("avg_hr"),
-                item.get("heart-rate") and item["heart-rate"].get("maximum") or item.get("max_hr"),
+                _metric_value(heart_rate, "average", "avg") or item.get("avg_hr"),
+                _metric_value(heart_rate, "maximum", "max") or item.get("max_hr"),
+                _metric_value(heart_rate, "minimum", "min") or item.get("min_hr"),
                 item.get("training-load") or item.get("training_load"),
+                item.get("ascent"),
+                item.get("descent"),
+                _metric_value(speed, "average") or item.get("average-speed") or item.get("average_speed"),
+                _metric_value(speed, "maximum") or item.get("maximum-speed") or item.get("maximum_speed"),
+                _metric_value(pace, "average") or item.get("average-pace") or item.get("average_pace"),
+                _metric_value(pace, "maximum") or item.get("maximum-pace") or item.get("maximum_pace"),
+                _metric_value(cadence, "average") or item.get("cadence_avg"),
+                _metric_value(cadence, "maximum") or item.get("cadence_max"),
+                _metric_value(power, "average") or item.get("power_avg"),
+                _metric_value(power, "maximum") or item.get("power_max"),
+                _route_points(route),
+                _json(samples) if samples is not None else None,
+                _json(zones) if zones is not None else None,
+                _json(route) if route is not None else None,
                 resource_uri,
                 _json(item),
             ),

@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import UTC, datetime
-from typing import Any, Callable
 
-from .api import PolarClient
-from .models import AppPaths, State, TransactionBundle
+from .api import PolarApiError, PolarClient
+from .models import AppPaths, State
 from .storage import (
     archive_json,
     init_db,
@@ -30,6 +29,7 @@ class SyncEngine:
         self.state = state
         self.connection = connection
         self.client = client
+        self.warnings: list[str] = []
         init_db(self.connection)
 
     def run(self, resource: str, since_days: int | None = None) -> dict[str, int]:
@@ -37,9 +37,9 @@ class SyncEngine:
         counts = {"exercises": 0, "activity": 0, "sleep": 0, "nightly_recharge": 0}
         try:
             if resource in {"all", "exercises"}:
-                counts["exercises"] = self.sync_exercises()
+                counts["exercises"] = self.sync_exercises(since_days)
             if resource in {"all", "activity"}:
-                counts["activity"] = self.sync_activity()
+                counts["activity"] = self.sync_activity(since_days)
             if resource in {"all", "sleep"}:
                 counts["sleep"] = self.sync_sleep(since_days)
             if resource in {"all", "nightly-recharge"}:
@@ -66,21 +66,27 @@ class SyncEngine:
             )
             raise
 
-    def sync_exercises(self) -> int:
-        return self._sync_transactional(
-            resource_name="exercises",
-            resource_path="exercise",
-            list_key="exercises",
-            store_fn=upsert_exercises,
-        )
+    def sync_exercises(self, since_days: int | None = None) -> int:
+        items = self.client.get_exercises(since_days)
+        with self.connection:
+            count = upsert_exercises(self.connection, self.state.polar_user_id or "", items)
+            archive_json(self.paths, "exercises", {"items": items}, "collection")
+            for index, item in enumerate(items, start=1):
+                archive_json(self.paths, "exercises", item, f"detail-{index}")
+        return count
 
-    def sync_activity(self) -> int:
-        return self._sync_transactional(
-            resource_name="activity",
-            resource_path="activity",
-            list_key="activities",
-            store_fn=upsert_activity_summaries,
-        )
+    def sync_activity(self, since_days: int | None = None) -> int:
+        try:
+            items = self.client.get_activity(since_days)
+        except PolarApiError as exc:
+            if exc.status_code == 404:
+                self.warnings.append("Activity endpoint is unavailable for this account right now; skipped activity sync.")
+                return 0
+            raise
+        with self.connection:
+            count = upsert_activity_summaries(self.connection, self.state.polar_user_id or "", items)
+            archive_json(self.paths, "activity", {"items": items}, "collection")
+        return count
 
     def sync_sleep(self, since_days: int | None = None) -> int:
         items = self.client.get_sleep(self.state.polar_user_id or "", since_days)
@@ -94,25 +100,4 @@ class SyncEngine:
         with self.connection:
             count = upsert_nightly_recharge(self.connection, self.state.polar_user_id or "", items)
             archive_json(self.paths, "nightly-recharge", {"items": items}, "collection")
-        return count
-
-    def _sync_transactional(
-        self,
-        *,
-        resource_name: str,
-        resource_path: str,
-        list_key: str,
-        store_fn: Callable[[sqlite3.Connection, str, list[dict[str, Any]]], int],
-    ) -> int:
-        bundle = self.client.open_transaction(self.state.polar_user_id or "", resource_path, list_key)
-        details = [self.client.fetch_resource(item_url) for item_url in bundle.item_urls]
-
-        with self.connection:
-            count = store_fn(self.connection, self.state.polar_user_id or "", details)
-            archive_json(self.paths, resource_name, bundle.raw_open, "transaction-open")
-            archive_json(self.paths, resource_name, bundle.raw_listing, "transaction-list")
-            for index, detail in enumerate(details, start=1):
-                archive_json(self.paths, resource_name, detail, f"detail-{index}")
-
-        self.client.commit_transaction(bundle)
         return count
